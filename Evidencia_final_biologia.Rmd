@@ -1,0 +1,194 @@
+---
+title: "Evidencia_biologia_compu"
+author: "Diego Méndez Morales"
+date: "2025-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+```{r echo=FALSE}
+
+#Configuración inicial, instalación de librerias
+
+if (!requireNamespace("msa", quietly = TRUE)) BiocManager::install("msa")
+if (!requireNamespace("DECIPHER", quietly = TRUE)) BiocManager::install("DECIPHER")
+if (!requireNamespace("phangorn", quietly = TRUE)) BiocManager::install("phangorn")
+
+library(ade4)
+library(ape)
+library(adegenet)
+library(Biostrings)
+library(DECIPHER)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(phangorn)
+library(ggthemes)
+library(ggrepel)
+library(msa)
+
+```
+
+```{r}
+
+# Lista de países donde hubo más casos reportados
+
+countries <- c("usa", "china", "india", "france", "germany", "brazil", "south_korea", "japan", "italy", "uk")
+
+sequences <- sapply(countries, function(x) readDNAStringSet(paste("./sequences/", x, ".fasta", sep="")))
+
+dna_bins <- do.call(c, sapply(sequences, as.DNAbin))
+
+country_titles <- sapply(countries, function(string) str_to_title(str_replace(string, "_", " ")))
+
+# Creación de Dataframe de las secuencias
+
+sequence_frame <- data.frame(
+  country_key = countries,
+  country_title  = country_titles,
+  sequence_length = sapply(sequences, width),
+  a_frequency = sapply(sequences, function(seq) letterFrequency(seq, 'A')),
+  c_frequency = sapply(sequences, function(seq) letterFrequency(seq, 'C')),
+  g_frequency = sapply(sequences, function(seq) letterFrequency(seq, 'G')),
+  t_frequency = sapply(sequences, function(seq) letterFrequency(seq, 'T'))
+)
+
+# Tamaño de las secuencias
+print("The sequence lengths for each genome are as follows")
+sequence_frame[3]
+
+# Frecuencia de bases nitrogenadas
+print("The frequencies for each base in each genome are as follows:")
+sequence_frame[c(4, 5, 6, 7)]
+
+```
+
+```{r}
+# Gráfica de las frecuencias
+ggplot(
+  data = sequence_frame %>% gather(Frequencies, Frequency, -country_title, -country_key, -sequence_length),
+  aes(x = country_title, y = Frequency, fill = Frequencies)
+) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  xlab("Countries") +
+  scale_fill_discrete(
+    labels = c(
+      "a_frequency" = "Number of A Bases",
+      "c_frequency" = "Number of C Bases",
+      "g_frequency" = "Number of G Bases",
+      "t_frequency" = "Number of T Bases"
+  ))
+
+```
+
+En esta gráfica se pueden apreciar las distintas bases nitrogenadas de los genomas que integran las variantes del coronavirus, como podemos observar, todos comparten en su mayoría el mismo porcentaje de frecuencia en sus bases nitrogenadas con algunas diferencias leves, ya que estamos comparando el mismo virus.
+
+Estas pequeñas diferencias se pueden deber a distintas mutaciones que sufrió el virus a la hora de emigrar a distintas partes del mundo, tal vez algunos factores externos, como el clima , afectaron al virus de manera que este tuvo que mutar para poder subsistir en el nuevo entorno.
+
+
+```{r}
+countries <- c("usa", "china", "india", "france", "germany", "brazil", "south_korea", "japan", "italy", "uk")
+
+# Pasar a DNAStringSet
+all_sequences <- DNAStringSet()
+for (country in countries) {
+  file_path <- paste0("./sequences/", country, ".fasta")
+  seq <- readDNAStringSet(file_path)
+  all_sequences <- c(all_sequences, seq)
+}
+
+# Frecuencia de mortalidad de los países (correspondientes a los de arriba)
+
+mortality_data <- data.frame(
+  label = countries,  # Must match tree$tip.label
+  Cases = c(103436829, 99380363, 45043415, 39016278, 38437756, 37511921, 
+            34571873, 33803572, 26826486, 24992089),
+  Deaths = c(1201488, 122358, 533641, 168091, 174979, 702116, 
+             35934, 74694, 197542, 232112)
+  
+) %>% 
+  mutate(
+    Mortality = round(Deaths/Cases * 100, 2),
+    Country = stringr::str_to_title(gsub("_", " ", label))
+  )
+
+mortality_data$Rates = mortality_data$Deaths / mortality_data$Cases
+
+# Alinear las secuncias
+aligned <- AlignSeqs(all_sequences)
+dna <- as.matrix(as.DNAbin(aligned))
+
+# Configuración de paro si no estan alineados
+stopifnot(length(unique(ncol(dna))) == 1)
+
+# Distribucion DNA
+dna_distro <- dist.dna(dna, model = "TN93")
+
+# Creación del árbol
+phylotree <- nj(dna_distro)
+
+# Cálculo de Bootstrapping
+boots <- boot.phylo(
+  phylotree, 
+  dna, 
+  function(e) root(nj(dist.dna(e, model = "TN93")), 1),
+  B = 100,
+  quiet = TRUE
+)
+
+# Impresión del árbol filogenético con sus valores de bootstraping
+
+myPal <- colorRampPalette(c("red","yellow","green","blue"))
+mortalityPalette <- colorRampPalette(c("red", "blue"))
+plot(phylotree, cex = 0.6, main = "NJ Tree")
+nodelabels(boots, bg = "white", cex = 0.6, col=transp(num2col(boots, col.pal=myPal),.7))
+tiplabels(frame = "none", pch = 20, col = transp(num2col(mortality_data$Rates, col.pal=mortalityPalette)))
+
+```
+
+En este árbol podemos identificar las distintas variantes del Sars-Cov 2 en el mundo, donde podemos apreciar cuáles de estas están más emparentadas que otras, o cuáles pueden venir de un ancestro en común más reciente que otras. El boostrapping nos indica el grado de veracidad que tiene la rama sobre otras, donde entre mayor sea el porcentaje, más certeza se tiene sobre si esa linea evolutiva es verdaera o falta alguna información importante que pueda afectar a la rama en algún punto. 
+
+Las etiquetas de colores nos indican la tasa de mortalidad que tuvieron estos virus en la época de la pandemia, donde el rojo simboliza el más fuerte y el azul es más leve, aquí es donde nos podemos dar cuenta en donde o en qué partes del mundo fue donde afecto más el virus.
+
+Este tipo de gráficos nos ayudan a entender un poco mejor la historia del virus en cuestión que se este analizando, con esto podemos organizar mejor la información para atacar a virus similares, ya que, con estos registros, se puede dar prioridad a zonas donde sea más probable que afecte más algún tipo de virus y llevar vacunas más rápido a esas zonas, o ver cuáles variantes son más débiles y más fáciles para atacar primero.
+
+
+```{r}
+# Conversión de la distribución del DNA a una tabla
+adj_matrix <- as.matrix(dna_distro)
+table.paint(
+  adj_matrix,
+  cleg = 0,
+  clabel.row = 0.25,
+  clabel.col = 0.25
+)
+```
+
+En esta gráfica nos indica la distancia genética que hay entre las variantes que se presentaron en los países analizados, estas distancias nos indican cuan diferentes son las variantes de cada país comparadas unas con otras, donde se aprecia la diagonal absoluta gracias a que se esta tratando de comprara al mismo país con el mismo, y donde cada color más obscuro nos indica más parecido entre las variantes. 
+
+Estas gráficas sirven como una herramienta rápida para apreciar las variantes más porpagadas en el mundo hasta antes de ver el árbol filogenético, con este, podemos identificar las zonas a las cualés podemos atacar primero las enfermedades sin tomarle tanta importancia a su historia evolutiva. Es más útil cuando estemos trabajando con secuencias en países vecinos o con un índice alta de estatus migratorios altos.
+
+#Conclusión del proyecto
+
+Este análisis de datos genómicos con ayuda de la bioinformática nos ayuda a poder identificar, evaluar y analizar las mutaciones o variaciones que presentó el Sars-Cov 2 a nivel mundial y como este afecto a varios países de distinta manera sin importar de que se tratace del mismo virus. 
+
+Se pudo observar que los genomas del virus analizo en distintas partes mundo presentó ligeras variaciones en sus bases nitrogenadas, esto se puede tratar de distintos factores dentro del país que no representan una gran mutación para que se pueda tratar de una variante distinta del virus por país.
+
+La evidencia analizada nos indica que el virus no ataca de distinta manera entre distintos tipos de poblaciones, es decir, su estatus no indica que el virus cambie por factores étnicos de la zona, se estima de que se trate de factores externos como el clima, sistema de salud, medidas sanitarias impartidas durante la época de altos contagios, etc. Estas variantes se ven más afectadas por factores cronológicos, como en qué momento fue cuando este virus llegó al país o cuál fue su ruta de expansión, con ello, si podríamos hacer un mapa para ver estos distintos casos de mutaciones.
+
+Gracias a todo lo que pudimos analizar durante este curso, fuimos capaces de poder analizar y evaluar distintos genomas de virus que afectaron a la humanidad en sus épocas y ver las posibles causas de que se puedan presnetar variaciones o mutaciones de un mismo virus dentro de un solo país; este tipo de estudios ayudan a la humanidad a poder analizar más a los seres con los que convivimos y que nos pueden a dar una ayuda o nos pueden llevar a una pandemia mundial como fue el caso del virus analizado durante este periodo el cual fue el Sars-Cov 2.
